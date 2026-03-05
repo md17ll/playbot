@@ -14,9 +14,6 @@ import user_flow
 import admin_flow
 
 
-# -----------------------------
-# DB: upsert user
-# -----------------------------
 def upsert_user(update: Update):
     u = update.effective_user
     if not u:
@@ -39,17 +36,11 @@ def upsert_user(update: Update):
     )
 
 
-# -----------------------------
-# /start
-# -----------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upsert_user(update)
     await user_flow.show_home(update, context)
 
 
-# -----------------------------
-# Callbacks Router
-# -----------------------------
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if not q:
@@ -110,6 +101,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_flow.admin_stats(update, context)
         return
 
+    # ✅ FIX: wire missing admin buttons (they were "for show")
+    if data == "admin:products":
+        await admin_flow.admin_products(update, context)
+        return
+    if data == "admin:coupons":
+        await admin_flow.admin_coupons(update, context)
+        return
+    if data == "admin:balance":
+        await admin_flow.admin_balance(update, context)
+        return
+
     # Admin order actions
     if data.startswith("order:done:"):
         try:
@@ -128,24 +130,31 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-# -----------------------------
-# Text messages (Admin states)
-# -----------------------------
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upsert_user(update)
 
-    # أدمن: تعديل رسالة البدء / بحث / إذاعة
+    # ✅ admin states (edit start / search / broadcast / products / coupons / balance commands)
     await admin_flow.handle_admin_text(update, context)
 
-    # المستخدم العادي (حالياً توجيه)
-    # لاحقاً سنربط إنشاء الطلبات/الشحن/الكوبون هنا بشكل كامل
-    if update.effective_user and update.effective_user.id:
-        # لا نزعج الأدمن برسائل إضافية إذا كان في وضع انتظار إداري
-        pass
+    # ✅ FIX: pass user text to user_flow (coupon/topup/etc)
+    handled = await user_flow.handle_text(update, context)
+    if handled:
+        return
 
-    if update.message and update.message.text:
-        # رد بسيط
-        await update.message.reply_text("استخدم الأزرار 👇 أو اكتب /start لعرض القائمة.")
+    # fallback (only if nothing handled)
+    await update.message.reply_text("استخدم الأزرار 👇 أو اكتب /start لعرض القائمة.")
+
+
+async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    upsert_user(update)
+
+    # ✅ FIX: allow user_flow to accept proofs as photo
+    handled = await user_flow.handle_photo(update, context)
+    if handled:
+        return
+
+    # إذا الصورة ليست ضمن أي خطوة
+    await update.message.reply_text("استخدم الأزرار 👇 أو اكتب /start لعرض القائمة.")
 
 
 def main():
@@ -154,13 +163,17 @@ def main():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL غير موجود. فعّل PostgreSQL على Railway وسيظهر المتغير تلقائياً.")
 
-    # إنشاء الجداول
     init_db()
 
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(on_callback))
+
+    # ✅ NEW: photos
+    app.add_handler(MessageHandler(filters.PHOTO, on_photo))
+
+    # texts
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     app.run_polling(drop_pending_updates=True)
